@@ -309,10 +309,12 @@ function saveConfig() {
   const tenantId = document.getElementById('cfg-tenantId').value.trim();
   const siteName = document.getElementById('cfg-siteName').value.trim();
   if (!clientId || !tenantId || !siteName) { alert('Please fill in all three fields.'); return; }
-  localStorage.setItem(CFG_KEY, JSON.stringify({ clientId, tenantId, siteName }));
+  const cfg = { clientId, tenantId, siteName };
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+  msalApp = null;
   closeSetup();
-  initMsal({ clientId, tenantId, siteName });
-  showToast('Configuration saved');
+  initMsal(cfg);
+  showToast('Saved — now click Sign in with Microsoft');
 }
 
 // ── MSAL ───────────────────────────────────────────────
@@ -331,6 +333,14 @@ function initMsal(cfg) {
 }
 
 async function signIn() {
+  // If MSAL isn't initialized, try loading config and initializing first
+  if (!msalApp) {
+    const cfg = loadConfig();
+    if (!cfg) { openSetup(); return; }
+    initMsal(cfg);
+    // Give MSAL a moment to initialize before proceeding
+    await new Promise(r => setTimeout(r, 500));
+  }
   if (!msalApp) { openSetup(); return; }
   try {
     const r = await msalApp.loginPopup({ scopes: ['Sites.ReadWrite.All'] });
@@ -338,7 +348,10 @@ async function signIn() {
     siteId = null; listId = null;
     updateAuthUI();
     showToast('Signed in ✓');
-  } catch(e) { showToast('Sign-in failed — check setup', true); }
+  } catch(e) {
+    console.error(e);
+    showToast('Sign-in failed — check setup', true);
+  }
 }
 
 async function signOut() {
