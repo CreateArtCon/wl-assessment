@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worship Leader Assessment — Ada Bible Church</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-authentication-library-for-js/2.38.3/msal-browser.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --dark: #2b2b2b; --olive: #5a7a2e; --teal: #2d6e6e; --gold: #7a6e2e;
+    --rule: #e0e0da; --light-bg: #f8f8f5; --framing-bg: #f0f0ec;
+    --mid-gray: #888; --light-gray: #bbb; --text: #3a3a38;
+  }
+  body { font-family: 'Inter', sans-serif; background: #f0efe9; color: var(--text); min-height: 100vh; }
+  .shell { max-width: 780px; margin: 0 auto; padding: 28px 16px 60px; }
+
+  .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+  .org-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--mid-gray); font-weight: 600; }
+  .top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .auth-banner { background: #fff; border: 1px solid var(--rule); border-left: 4px solid var(--olive); border-radius: 4px; padding: 14px 20px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .auth-banner-text { font-size: 12.5px; color: #4a4a47; line-height: 1.5; }
+  .auth-banner-text strong { color: var(--dark); }
+  .auth-status { font-size: 11px; color: var(--mid-gray); margin-top: 3px; }
+  .auth-status.signed-in { color: var(--olive); }
+
+  /* Setup modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
+  .modal-overlay.hidden { display: none; }
+  .modal { background: #fff; border-radius: 6px; padding: 28px; max-width: 540px; width: 100%; box-shadow: 0 8px 40px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; }
+  .modal h2 { font-size: 18px; font-weight: 700; color: var(--dark); margin-bottom: 6px; }
+  .modal .subtitle { font-size: 12.5px; color: #666; margin-bottom: 18px; line-height: 1.6; }
+  .setup-steps { background: var(--light-bg); border-radius: 4px; padding: 14px 16px; margin-bottom: 18px; }
+  .setup-steps ol { padding-left: 18px; }
+  .setup-steps li { font-size: 12px; color: #555; margin-bottom: 7px; line-height: 1.55; }
+  .setup-steps li:last-child { margin-bottom: 0; }
+  .setup-steps a { color: var(--teal); }
+  .setup-steps code { background: #e8e8e3; padding: 1px 5px; border-radius: 3px; font-size: 11px; font-family: monospace; }
+  .modal label { display: block; font-size: 9px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mid-gray); margin-bottom: 5px; margin-top: 14px; }
+  .modal input { width: 100%; border: 1px solid var(--rule); border-radius: 4px; padding: 9px 11px; font-size: 13px; font-family: 'Inter', sans-serif; color: var(--dark); outline: none; }
+  .modal input:focus { border-color: var(--olive); }
+  .modal .hint { font-size: 11px; color: #999; margin-top: 5px; line-height: 1.5; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 22px; justify-content: flex-end; }
+
+  /* History */
+  .history-drawer { background: #fff; border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 14px; overflow: hidden; display: none; }
+  .history-drawer.open { display: block; }
+  .history-header { background: var(--dark); color: #ccc; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; padding: 10px 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .history-list { max-height: 280px; overflow-y: auto; }
+  .history-empty { padding: 20px 16px; font-size: 12px; color: var(--light-gray); font-style: italic; }
+  .history-loading { padding: 20px 16px; font-size: 12px; color: var(--mid-gray); }
+  .history-item { display: flex; align-items: center; justify-content: space-between; padding: 11px 16px; border-bottom: 1px solid var(--rule); gap: 12px; cursor: pointer; }
+  .history-item:last-child { border-bottom: none; }
+  .history-item:hover { background: var(--light-bg); }
+  .history-item-name { font-size: 13px; font-weight: 600; color: var(--dark); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .history-item-meta { font-size: 11px; color: var(--mid-gray); margin-top: 2px; }
+
+  /* Buttons */
+  .btn { background: var(--dark); color: #ccc; border: none; border-radius: 4px; padding: 7px 14px; font-size: 11px; font-family: 'Inter', sans-serif; letter-spacing: 0.08em; cursor: pointer; transition: background 0.15s; font-weight: 500; }
+  .btn:hover:not(:disabled) { background: #444; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.olive { background: var(--olive); color: #fff; }
+  .btn.olive:hover:not(:disabled) { background: #4a6624; }
+  .btn.ghost { background: transparent; color: var(--mid-gray); border: 1px solid var(--rule); }
+  .btn.ghost:hover:not(:disabled) { background: var(--light-bg); color: var(--text); }
+  .btn.danger { background: transparent; color: #c0392b; border: 1px solid #e8c5c2; font-size: 10px; padding: 5px 10px; }
+  .btn.danger:hover { background: #fdf0ef; }
+  .btn.sm { padding: 5px 10px; font-size: 10px; }
+
+  /* Document */
+  .doc { background: #fff; box-shadow: 0 2px 20px rgba(0,0,0,0.08); border-radius: 4px; overflow: hidden; }
+  .doc-header { background: var(--dark); border-left: 6px solid var(--olive); padding: 22px 28px 18px; }
+  .doc-eyebrow { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #888; font-weight: 600; margin-bottom: 5px; }
+  .doc-title { font-size: 26px; font-weight: 700; color: #fff; margin-bottom: 18px; line-height: 1.2; }
+  .meta-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px 16px; }
+  @media (max-width: 600px) { .meta-grid { grid-template-columns: repeat(2, 1fr); } }
+  .meta-field label { display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #777; font-weight: 600; margin-bottom: 4px; }
+  .meta-field input { width: 100%; background: transparent; border: none; border-bottom: 1px solid #555; color: #ddd; font-size: 12px; font-family: 'Inter', sans-serif; padding: 2px 0 4px; outline: none; }
+  .meta-field input::placeholder { color: #555; }
+  .meta-field input:focus { border-bottom-color: var(--olive); }
+
+  .framing { background: var(--framing-bg); border-left: 4px solid var(--teal); padding: 14px 20px; font-size: 12.5px; color: #4a4a47; line-height: 1.75; border-bottom: 1px solid var(--rule); }
+
+  .section-block { padding: 20px 28px 6px; border-top: 1px solid var(--rule); }
+  .section-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .section-num { font-size: 10px; font-weight: 600; letter-spacing: 0.14em; color: var(--light-gray); }
+  .section-dash { width: 18px; height: 2px; flex-shrink: 0; }
+  .section-dash.olive { background: var(--olive); }
+  .section-dash.teal { background: var(--teal); }
+  .section-dash.gold { background: var(--gold); }
+  .section-title { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dark); }
+
+  .question-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 10px 0; border-bottom: 1px solid #f2f2ee; }
+  .question-row:last-of-type { border-bottom: none; }
+  .question-text { font-size: 12px; color: #444; line-height: 1.45; flex: 1; }
+
+  .rating-inline { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .rating-anchor { font-size: 9px; color: var(--light-gray); font-style: italic; white-space: nowrap; }
+  .rating-pips { display: flex; gap: 4px; }
+  .pip { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid #ddd; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: #aaa; cursor: pointer; transition: all 0.12s; background: #fff; user-select: none; }
+  .pip:hover { border-color: var(--olive); color: var(--olive); }
+  .pip.selected { background: var(--olive); border-color: var(--olive); color: #fff; }
+
+  .section-notes { padding: 10px 0 18px; }
+  .notes-label { font-size: 9px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #ccc; margin-bottom: 5px; }
+  .notes-box { width: 100%; background: #fafaf8; border: 1px solid var(--rule); border-radius: 3px; padding: 9px 11px; font-size: 12px; font-family: 'Inter', sans-serif; color: var(--text); resize: vertical; min-height: 60px; line-height: 1.55; outline: none; transition: border-color 0.15s; }
+  .notes-box::placeholder { color: #ccc; font-style: italic; }
+  .notes-box:focus { border-color: var(--teal); }
+
+  .footer-actions { background: var(--light-bg); border-top: 2px solid var(--dark); display: grid; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 500px) { .footer-actions { grid-template-columns: 1fr; } }
+  .action-block { padding: 16px 20px; border-right: 1px solid var(--rule); }
+  .action-block:last-child { border-right: none; }
+  .action-eyebrow { font-size: 9px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; color: #aaa; margin-bottom: 6px; }
+  .action-box { width: 100%; background: #fff; border: 1px solid var(--rule); border-radius: 3px; padding: 9px 11px; font-size: 12px; font-family: 'Inter', sans-serif; color: var(--text); resize: vertical; min-height: 58px; line-height: 1.55; outline: none; transition: border-color 0.15s; }
+  .action-box::placeholder { color: #ccc; font-style: italic; }
+  .action-box:focus { border-color: var(--olive); }
+
+  .doc-controls { background: var(--dark); padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .save-status { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #666; }
+  .doc-controls-right { display: flex; gap: 8px; align-items: center; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--dark); color: #ccc; padding: 10px 20px; border-radius: 6px; font-size: 12px; font-weight: 500; border-left: 3px solid var(--olive); transition: transform 0.3s ease; z-index: 300; white-space: nowrap; pointer-events: none; }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.err { border-left-color: #c0392b; }
+
+  @media print {
+    body { background: #fff; }
+    .shell { padding: 0; max-width: 100%; }
+    .top-bar, .auth-banner, .history-drawer, .doc-controls { display: none !important; }
+    .doc { box-shadow: none; border-radius: 0; }
+    .pip, .doc-header, .framing { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Setup modal -->
+  <div class="modal-overlay hidden" id="setupModal">
+    <div class="modal">
+      <h2>Connect to Microsoft 365</h2>
+      <p class="subtitle">This registers the app with your Azure tenant so it can save assessments to a SharePoint List. You only do this once.</p>
+      <div class="setup-steps">
+        <ol>
+          <li>Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/CreateApplicationBlade" target="_blank">Azure App Registrations</a> → <strong>New registration</strong>.</li>
+          <li>Name: <code>WL Assessment</code>. Account type: <em>Accounts in this organizational directory only</em>.</li>
+          <li>Redirect URI: choose <strong>Single-page application (SPA)</strong> and paste the full URL where this file is hosted (your SharePoint or OneDrive link).</li>
+          <li>Click <strong>Register</strong>. Copy the <strong>Application (client) ID</strong> and <strong>Directory (tenant) ID</strong> from the Overview page.</li>
+          <li>Go to <strong>API permissions → Add permission → Microsoft Graph → Delegated → Sites.ReadWrite.All</strong>. Grant admin consent.</li>
+        </ol>
+      </div>
+      <label>Application (Client) ID</label>
+      <input type="text" id="cfg-clientId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      <label>Directory (Tenant) ID</label>
+      <input type="text" id="cfg-tenantId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      <label>SharePoint Site Name</label>
+      <input type="text" id="cfg-siteName" placeholder="e.g. CreativeArts">
+      <div class="hint">The part after /sites/ in your SharePoint URL. The assessment list will be created automatically on first save.</div>
+      <div class="modal-actions">
+        <button class="btn ghost" onclick="closeSetup()">Cancel</button>
+        <button class="btn olive" onclick="saveConfig()">Save & Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <span class="org-label">Ada Bible Church · Creative Arts</span>
+    <div class="top-actions">
+      <button class="btn ghost sm" onclick="openSetup()">⚙ Setup</button>
+      <button class="btn ghost" id="historyBtn" onclick="toggleHistory()" disabled>📋 Past Assessments</button>
+      <button class="btn ghost" onclick="newAssessment()">+ New</button>
+    </div>
+  </div>
+
+  <!-- Auth banner -->
+  <div class="auth-banner">
+    <div>
+      <div class="auth-banner-text"><strong>Sign in with Microsoft</strong> to save assessments to SharePoint — accessible from any device by both of you.</div>
+      <div class="auth-status" id="authStatus">Not signed in. Assessments will save to this browser only.</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn ghost sm" id="signOutBtn" onclick="signOut()" style="display:none">Sign out</button>
+      <button class="btn olive" id="signInBtn" onclick="signIn()">Sign in with Microsoft</button>
+    </div>
+  </div>
+
+  <!-- History drawer -->
+  <div class="history-drawer" id="historyDrawer">
+    <div class="history-header">
+      <span>Saved Assessments</span>
+      <button class="btn ghost sm" onclick="loadHistory()" style="padding:3px 8px;font-size:9px;border-color:#555;color:#999">↻ Refresh</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+  </div>
+
+  <!-- Document -->
+  <div class="doc">
+    <div class="doc-header">
+      <div class="doc-eyebrow">Worship Leader Assessment</div>
+      <div class="doc-title">Ada Bible Church</div>
+      <div class="meta-grid">
+        <div class="meta-field"><label>Campus</label><input type="text" id="f-campus" placeholder="e.g. Ada" oninput="markDirty()"></div>
+        <div class="meta-field"><label>Worship Leader</label><input type="text" id="f-wl" placeholder="Name" oninput="markDirty()"></div>
+        <div class="meta-field"><label>Date</label><input type="date" id="f-date" oninput="markDirty()"></div>
+        <div class="meta-field"><label>Service</label><input type="text" id="f-service" placeholder="e.g. 9am" oninput="markDirty()"></div>
+        <div class="meta-field"><label>Assessor</label><input type="text" id="f-assessor" placeholder="Your name" oninput="markDirty()"></div>
+      </div>
+    </div>
+
+    <div class="framing">
+      We all have blind spots — and the people best positioned to help us see them are the ones paying close attention and genuinely rooting for us. This is a simple tool for that kind of conversation. The numbers give us a shared starting point, but the real value is in what we talk about together. Come ready to listen, ask good questions, and leave room for the person in front of you to reflect and share openly.
+    </div>
+
+    <!-- Section 01 -->
+    <div class="section-block">
+      <div class="section-heading"><span class="section-num">01</span><span class="section-dash olive"></span><span class="section-title">Love The Lord</span></div>
+      <div class="question-row">
+        <div class="question-text">How much prep time — spiritual and practical — went into this weekend?</div>
+        <div class="rating-inline"><span class="rating-anchor">Minimal</span><div class="rating-pips" id="r-ltl1"><div class="pip" onclick="selectPip('r-ltl1',1)">1</div><div class="pip" onclick="selectPip('r-ltl1',2)">2</div><div class="pip" onclick="selectPip('r-ltl1',3)">3</div><div class="pip" onclick="selectPip('r-ltl1',4)">4</div><div class="pip" onclick="selectPip('r-ltl1',5)">5</div></div><span class="rating-anchor">Exceptional</span></div>
+      </div>
+      <div class="question-row">
+        <div class="question-text">How much depth and intention in the circle-up time?</div>
+        <div class="rating-inline"><span class="rating-anchor">Minimal</span><div class="rating-pips" id="r-ltl2"><div class="pip" onclick="selectPip('r-ltl2',1)">1</div><div class="pip" onclick="selectPip('r-ltl2',2)">2</div><div class="pip" onclick="selectPip('r-ltl2',3)">3</div><div class="pip" onclick="selectPip('r-ltl2',4)">4</div><div class="pip" onclick="selectPip('r-ltl2',5)">5</div></div><span class="rating-anchor">Exceptional</span></div>
+      </div>
+      <div class="section-notes"><div class="notes-label">Observations &amp; Questions</div><textarea class="notes-box" id="n-ltl" placeholder="What did you notice? What would you ask?" oninput="markDirty()"></textarea></div>
+    </div>
+
+    <!-- Section 02 -->
+    <div class="section-block">
+      <div class="section-heading"><span class="section-num">02</span><span class="section-dash teal"></span><span class="section-title">Lead The Room</span></div>
+      <div class="question-row">
+        <div class="question-text">Skillful and effective vocal and instrumental leadership?</div>
+        <div class="rating-inline"><span class="rating-anchor">Minimal</span><div class="rating-pips" id="r-ltr1"><div class="pip" onclick="selectPip('r-ltr1',1)">1</div><div class="pip" onclick="selectPip('r-ltr1',2)">2</div><div class="pip" onclick="selectPip('r-ltr1',3)">3</div><div class="pip" onclick="selectPip('r-ltr1',4)">4</div><div class="pip" onclick="selectPip('r-ltr1',5)">5</div></div><span class="rating-anchor">Exceptional</span></div>
+      </div>
+      <div class="question-row">
+        <div class="question-text">Clear and compelling worship leader verbals?</div>
+        <div class="rating-inline"><span class="rating-anchor">Minimal</span><div class="rating-pips" id="r-ltr2"><div class="pip" onclick="selectPip('r-ltr2',1)">1</div><div class="pip" onclick="selectPip('r-ltr2',2)">2</div><div class="pip" onclick="selectPip('r-ltr2',3)">3</div><div class="pip" onclick="selectPip('r-ltr2',4)">4</div><div class="pip" onclick="selectPip('r-ltr2',5)">5</div></div><span class="rating-anchor">Exceptional</span></div>
+      </div>
+      <div class="section-notes"><div class="notes-label">Observations &amp; Questions</div><textarea class="notes-box" id="n-ltr" placeholder="What did you notice? What would you ask?" oninput="markDirty()"></textarea></div>
+    </div>
+
+    <!-- Section 03 -->
+    <div class="section-block">
+      <div class="section-heading"><span class="section-num">03</span><span class="section-dash gold"></span><span class="section-title">Grow The Team</span></div>
+      <div class="question-row">
+        <div class="question-text">Helpful and purposeful band coaching?</div>
+        <div class="rating-inline"><span class="rating-anchor">Minimal</span><div class="rating-pips" id="r-gtt1"><div class="pip" onclick="selectPip('r-gtt1',1)">1</div><div class="pip" onclick="selectPip('r-gtt1',2)">2</div><div class="pip" onclick="selectPip('r-gtt1',3)">3</div><div class="pip" onclick="selectPip('r-gtt1',4)">4</div><div class="pip" onclick="selectPip('r-gtt1',5)">5</div></div><span class="rating-anchor">Exceptional</span></div>
+      </div>
+      <div class="question-row">
+        <div class="question-text">Offstage and green room leadership?</div>
+        <div class="rating-inline"><span class="rating-anchor">Minimal</span><div class="rating-pips" id="r-gtt2"><div class="pip" onclick="selectPip('r-gtt2',1)">1</div><div class="pip" onclick="selectPip('r-gtt2',2)">2</div><div class="pip" onclick="selectPip('r-gtt2',3)">3</div><div class="pip" onclick="selectPip('r-gtt2',4)">4</div><div class="pip" onclick="selectPip('r-gtt2',5)">5</div></div><span class="rating-anchor">Exceptional</span></div>
+      </div>
+      <div class="section-notes"><div class="notes-label">Observations &amp; Questions</div><textarea class="notes-box" id="n-gtt" placeholder="What did you notice? What would you ask?" oninput="markDirty()"></textarea></div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer-actions">
+      <div class="action-block"><div class="action-eyebrow">Strengths to Affirm</div><textarea class="action-box" id="a-strengths" placeholder="What is going well and worth naming specifically?" oninput="markDirty()"></textarea></div>
+      <div class="action-block"><div class="action-eyebrow">Next Steps &amp; Growth Opportunities</div><textarea class="action-box" id="a-nextsteps" placeholder="What conversation or action comes next?" oninput="markDirty()"></textarea></div>
+    </div>
+
+    <div class="doc-controls">
+      <span class="save-status" id="saveStatus">New assessment</span>
+      <div class="doc-controls-right">
+        <button class="btn ghost" onclick="window.print()">Print / PDF</button>
+        <button class="btn olive" id="saveBtn" onclick="saveAssessment()">Save Assessment</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const CFG_KEY = 'wla_config';
+const LOCAL_KEY = 'wla_local';
+const LIST_NAME = 'WLAssessments';
+const RATING_IDS = ['r-ltl1','r-ltl2','r-ltr1','r-ltr2','r-gtt1','r-gtt2'];
+const RATING_FIELDS = ['RatingLTL1','RatingLTL2','RatingLTR1','RatingLTR2','RatingGTT1','RatingGTT2'];
+
+let msalApp = null, account = null, siteId = null, listId = null;
+let currentId = null, isDirty = false;
+const ratings = {};
+
+// Init
+document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
+setStatus('New assessment', '#888');
+const cfg = loadConfig();
+if (cfg) initMsal(cfg);
+
+// ── CONFIG ─────────────────────────────────────────────
+function loadConfig() { try { return JSON.parse(localStorage.getItem(CFG_KEY)); } catch { return null; } }
+
+function openSetup() {
+  const c = loadConfig() || {};
+  document.getElementById('cfg-clientId').value = c.clientId || '';
+  document.getElementById('cfg-tenantId').value = c.tenantId || '';
+  document.getElementById('cfg-siteName').value = c.siteName || '';
+  document.getElementById('setupModal').classList.remove('hidden');
+}
+function closeSetup() { document.getElementById('setupModal').classList.add('hidden'); }
+
+function saveConfig() {
+  const clientId = document.getElementById('cfg-clientId').value.trim();
+  const tenantId = document.getElementById('cfg-tenantId').value.trim();
+  const siteName = document.getElementById('cfg-siteName').value.trim();
+  if (!clientId || !tenantId || !siteName) { alert('Please fill in all three fields.'); return; }
+  localStorage.setItem(CFG_KEY, JSON.stringify({ clientId, tenantId, siteName }));
+  closeSetup();
+  initMsal({ clientId, tenantId, siteName });
+  showToast('Configuration saved');
+}
+
+// ── MSAL ───────────────────────────────────────────────
+function initMsal(cfg) {
+  try {
+    msalApp = new msal.PublicClientApplication({
+      auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}`, redirectUri: window.location.href.split('?')[0].split('#')[0] },
+      cache: { cacheLocation: 'localStorage' }
+    });
+    msalApp.handleRedirectPromise().then(r => {
+      if (r) account = r.account;
+      else { const a = msalApp.getAllAccounts(); if (a.length) account = a[0]; }
+      updateAuthUI();
+    }).catch(console.error);
+  } catch(e) { console.error('MSAL init failed', e); }
+}
+
+async function signIn() {
+  if (!msalApp) { openSetup(); return; }
+  try {
+    const r = await msalApp.loginPopup({ scopes: ['Sites.ReadWrite.All'] });
+    account = r.account;
+    siteId = null; listId = null;
+    updateAuthUI();
+    showToast('Signed in ✓');
+  } catch(e) { showToast('Sign-in failed — check setup', true); }
+}
+
+async function signOut() {
+  if (!msalApp || !account) return;
+  try { await msalApp.logoutPopup({ account }); } catch {}
+  account = null; siteId = null; listId = null;
+  updateAuthUI();
+  document.getElementById('historyDrawer').classList.remove('open');
+}
+
+function updateAuthUI() {
+  const on = !!account;
+  document.getElementById('signInBtn').style.display = on ? 'none' : '';
+  document.getElementById('signOutBtn').style.display = on ? '' : 'none';
+  document.getElementById('historyBtn').disabled = !on;
+  const s = document.getElementById('authStatus');
+  if (on) { s.textContent = `Signed in as ${account.name || account.username} — saving to SharePoint.`; s.className = 'auth-status signed-in'; }
+  else { s.textContent = 'Not signed in. Assessments will save to this browser only.'; s.className = 'auth-status'; }
+}
+
+async function getToken() {
+  if (!msalApp || !account) return null;
+  try { return (await msalApp.acquireTokenSilent({ scopes: ['Sites.ReadWrite.All'], account })).accessToken; }
+  catch { try { return (await msalApp.acquireTokenPopup({ scopes: ['Sites.ReadWrite.All'] })).accessToken; } catch { return null; } }
+}
+
+// ── GRAPH ──────────────────────────────────────────────
+async function graph(method, path, body) {
+  const token = await getToken();
+  if (!token) throw new Error('Not authenticated');
+  const r = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error?.message || `HTTP ${r.status}`); }
+  return r.status === 204 ? null : r.json();
+}
+
+async function ensureList() {
+  if (siteId && listId) return;
+  const cfg = loadConfig();
+  const site = await graph('GET', `/sites/root:/sites/${cfg.siteName}`);
+  siteId = site.id;
+  const lists = await graph('GET', `/sites/${siteId}/lists?$filter=displayName eq '${LIST_NAME}'&$select=id`);
+  if (lists.value.length) { listId = lists.value[0].id; return; }
+  const cols = [
+    { name: 'WLName', text: {} }, { name: 'Campus', text: {} },
+    { name: 'AssessmentDate', dateTime: { format: 'dateOnly' } },
+    { name: 'Service', text: {} }, { name: 'Assessor', text: {} },
+    ...RATING_FIELDS.map(n => ({ name: n, number: {} })),
+    { name: 'NotesLTL', text: { allowMultipleLines: true } },
+    { name: 'NotesLTR', text: { allowMultipleLines: true } },
+    { name: 'NotesGTT', text: { allowMultipleLines: true } },
+    { name: 'Strengths', text: { allowMultipleLines: true } },
+    { name: 'NextSteps', text: { allowMultipleLines: true } },
+  ];
+  const newList = await graph('POST', `/sites/${siteId}/lists`, { displayName: LIST_NAME, columns: cols, list: { template: 'genericList' } });
+  listId = newList.id;
+}
+
+// ── FORM ───────────────────────────────────────────────
+function getFields() {
+  const f = {
+    WLName: document.getElementById('f-wl').value,
+    Campus: document.getElementById('f-campus').value,
+    AssessmentDate: document.getElementById('f-date').value,
+    Service: document.getElementById('f-service').value,
+    Assessor: document.getElementById('f-assessor').value,
+    NotesLTL: document.getElementById('n-ltl').value,
+    NotesLTR: document.getElementById('n-ltr').value,
+    NotesGTT: document.getElementById('n-gtt').value,
+    Strengths: document.getElementById('a-strengths').value,
+    NextSteps: document.getElementById('a-nextsteps').value,
+  };
+  RATING_IDS.forEach((id, i) => { f[RATING_FIELDS[i]] = ratings[id] || null; });
+  return f;
+}
+
+function applyFields(f, id) {
+  currentId = id;
+  document.getElementById('f-wl').value = f.WLName || '';
+  document.getElementById('f-campus').value = f.Campus || '';
+  document.getElementById('f-date').value = (f.AssessmentDate || '').substring(0, 10);
+  document.getElementById('f-service').value = f.Service || '';
+  document.getElementById('f-assessor').value = f.Assessor || '';
+  document.getElementById('n-ltl').value = f.NotesLTL || '';
+  document.getElementById('n-ltr').value = f.NotesLTR || '';
+  document.getElementById('n-gtt').value = f.NotesGTT || '';
+  document.getElementById('a-strengths').value = f.Strengths || '';
+  document.getElementById('a-nextsteps').value = f.NextSteps || '';
+  RATING_IDS.forEach((rid, i) => setPip(rid, f[RATING_FIELDS[i]] || null));
+}
+
+function selectPip(gid, val) {
+  document.getElementById(gid).querySelectorAll('.pip').forEach((p, i) => p.classList.toggle('selected', i + 1 === val));
+  ratings[gid] = val; markDirty();
+}
+function setPip(gid, val) {
+  const c = document.getElementById(gid); if (!c) return;
+  c.querySelectorAll('.pip').forEach((p, i) => p.classList.toggle('selected', i + 1 === val));
+  ratings[gid] = val || null;
+}
+
+function clearForm() {
+  currentId = null;
+  ['f-wl','f-campus','f-service','f-assessor','n-ltl','n-ltr','n-gtt','a-strengths','a-nextsteps'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
+  RATING_IDS.forEach(id => setPip(id, null));
+}
+
+function markDirty() { isDirty = true; setStatus('Unsaved changes', '#e09050'); }
+function setStatus(t, c) { const el = document.getElementById('saveStatus'); el.textContent = t; el.style.color = c; }
+
+// ── SAVE ───────────────────────────────────────────────
+async function saveAssessment() {
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const fields = getFields();
+  try {
+    if (account) {
+      await ensureList();
+      if (currentId) {
+        await graph('PATCH', `/sites/${siteId}/lists/${listId}/items/${currentId}/fields`, fields);
+      } else {
+        const item = await graph('POST', `/sites/${siteId}/lists/${listId}/items`, { fields });
+        currentId = item.id;
+      }
+      const label = fields.WLName ? `Saved — ${fields.WLName}${fields.Campus ? ', ' + fields.Campus : ''}` : 'Saved to SharePoint';
+      setStatus(label, 'var(--olive)');
+      isDirty = false;
+      showToast('Saved to SharePoint ✓');
+    } else {
+      saveLocal(fields);
+      showToast('Saved locally ✓ (sign in to sync across devices)');
+    }
+  } catch(e) {
+    console.error(e);
+    saveLocal(fields);
+    showToast(`SharePoint error — saved locally instead`, true);
+  }
+  btn.disabled = false; btn.textContent = 'Save Assessment';
+}
+
+function saveLocal(fields) {
+  const all = JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
+  const id = currentId || `local-${Date.now()}`;
+  if (!currentId) currentId = id;
+  const entry = { id, savedAt: new Date().toISOString(), ...fields };
+  const idx = all.findIndex(a => a.id === id);
+  if (idx >= 0) all[idx] = entry; else all.unshift(entry);
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
+  setStatus('Saved locally', 'var(--olive)');
+  isDirty = false;
+}
+
+// ── HISTORY ────────────────────────────────────────────
+function toggleHistory() {
+  const d = document.getElementById('historyDrawer');
+  d.classList.toggle('open');
+  if (d.classList.contains('open')) loadHistory();
+}
+
+async function loadHistory() {
+  const list = document.getElementById('historyList');
+  list.innerHTML = '<div class="history-loading">Loading…</div>';
+  try {
+    await ensureList();
+    const data = await graph('GET', `/sites/${siteId}/lists/${listId}/items?$expand=fields($select=WLName,Campus,AssessmentDate,Assessor)&$orderby=lastModifiedDateTime desc&$top=50`);
+    renderHistory(data.value.map(item => ({ id: item.id, ...item.fields })));
+  } catch(e) {
+    list.innerHTML = `<div class="history-empty">Couldn't load — ${e.message}</div>`;
+  }
+}
+
+function renderHistory(items) {
+  const list = document.getElementById('historyList');
+  if (!items.length) { list.innerHTML = '<div class="history-empty">No saved assessments yet.</div>'; return; }
+  list.innerHTML = items.map(a => {
+    const name = a.WLName || 'Unnamed';
+    const campus = a.Campus ? ` · ${a.Campus}` : '';
+    const dateStr = a.AssessmentDate ? new Date(a.AssessmentDate + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    const assessor = a.Assessor ? ` · ${a.Assessor}` : '';
+    return `<div class="history-item" onclick="loadItem('${a.id}')" style="background:${a.id===currentId?'var(--light-bg)':'#fff'}">
+      <div style="flex:1;min-width:0">
+        <div class="history-item-name">${name}${campus}</div>
+        <div class="history-item-meta">${dateStr}${assessor}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn danger" onclick="deleteItem('${a.id}',event)">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadItem(id) {
+  try {
+    await ensureList();
+    const item = await graph('GET', `/sites/${siteId}/lists/${listId}/items/${id}?$expand=fields`);
+    applyFields(item.fields, id);
+    setStatus(`Loaded — ${item.fields.WLName || 'assessment'}`, 'var(--olive)');
+    isDirty = false;
+    document.getElementById('historyDrawer').classList.remove('open');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    showToast('Assessment loaded');
+  } catch(e) { showToast('Could not load assessment', true); }
+}
+
+async function deleteItem(id, e) {
+  e.stopPropagation();
+  if (!confirm('Delete this assessment? This cannot be undone.')) return;
+  try {
+    await ensureList();
+    await graph('DELETE', `/sites/${siteId}/lists/${listId}/items/${id}`);
+    if (currentId === id) clearForm();
+    loadHistory();
+    showToast('Deleted');
+  } catch(e) { showToast('Delete failed', true); }
+}
+
+function newAssessment() {
+  if (isDirty && !confirm('You have unsaved changes. Start a new assessment anyway?')) return;
+  clearForm(); markDirty(); setStatus('New assessment', '#888');
+  document.getElementById('historyDrawer').classList.remove('open');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (isErr ? ' err' : '');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+</script>
+</body>
+</html>
