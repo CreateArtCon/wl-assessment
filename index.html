@@ -275,25 +275,57 @@
 
 <div class="toast" id="toast"></div>
 
+
+<!-- Debug panel -->
+<div id="debugPanel" style="display:none;background:#fff;border:1px solid #e0e0da;border-left:4px solid #e09050;border-radius:4px;margin:0 0 14px;padding:12px 16px;max-height:180px;overflow-y:auto;font-size:11px;color:#555;font-family:monospace;line-height:1.6"></div>
+
 <script>
 const CFG_KEY = 'wla_config';
 const LOCAL_KEY = 'wla_local';
 const LIST_NAME = 'WLAssessments';
 const RATING_IDS = ['r-ltl1','r-ltl2','r-ltr1','r-ltr2','r-gtt1','r-gtt2'];
 const RATING_FIELDS = ['RatingLTL1','RatingLTL2','RatingLTR1','RatingLTR2','RatingGTT1','RatingGTT2'];
+const SCOPES = ['Sites.ReadWrite.All'];
 
-let msalApp = null, account = null, siteId = null, listId = null;
-let currentId = null, isDirty = false;
+let msalApp = null, msalReady = false, account = null;
+let siteId = null, listId = null, currentId = null, isDirty = false;
 const ratings = {};
 
-// Init
+// ── DEBUG ──────────────────────────────────────────────
+function dbg(msg, isErr) {
+  const p = document.getElementById('debugPanel');
+  p.style.display = 'block';
+  const d = document.createElement('div');
+  d.style.color = isErr ? '#c0392b' : '#555';
+  d.style.borderBottom = '1px solid #f0f0f0';
+  d.style.paddingBottom = '2px';
+  d.style.marginBottom = '2px';
+  d.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+  p.appendChild(d);
+  p.scrollTop = p.scrollHeight;
+}
+
+// ── INIT (async, runs on load) ─────────────────────────
 document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
 setStatus('New assessment', '#888');
-const cfg = loadConfig();
-if (cfg) initMsal(cfg);
+
+(async () => {
+  dbg('Page loaded. Checking for saved config...');
+  const cfg = loadConfig();
+  if (!cfg) {
+    dbg('No config found. Open ⚙ Setup to connect Microsoft 365.', true);
+    updateAuthUI();
+    return;
+  }
+  dbg('Config found: clientId=' + cfg.clientId.substring(0,8) + '..., site=' + cfg.siteName);
+  dbg('Redirect URI: ' + (window.location.origin + window.location.pathname));
+  await bootMsal(cfg);
+})();
 
 // ── CONFIG ─────────────────────────────────────────────
-function loadConfig() { try { return JSON.parse(localStorage.getItem(CFG_KEY)); } catch { return null; } }
+function loadConfig() {
+  try { return JSON.parse(localStorage.getItem(CFG_KEY)); } catch { return null; }
+}
 
 function openSetup() {
   const c = loadConfig() || {};
@@ -304,75 +336,79 @@ function openSetup() {
 }
 function closeSetup() { document.getElementById('setupModal').classList.add('hidden'); }
 
-function saveConfig() {
+async function saveConfig() {
   const clientId = document.getElementById('cfg-clientId').value.trim();
   const tenantId = document.getElementById('cfg-tenantId').value.trim();
   const siteName = document.getElementById('cfg-siteName').value.trim();
   if (!clientId || !tenantId || !siteName) { alert('Please fill in all three fields.'); return; }
   const cfg = { clientId, tenantId, siteName };
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
-  msalApp = null;
+  dbg('Config saved. Initializing MSAL...');
+  msalApp = null; msalReady = false;
   closeSetup();
-  initMsal(cfg);
-  showToast('Saved — now click Sign in with Microsoft');
+  await bootMsal(cfg);
+  showToast('Config saved — now click Sign in with Microsoft');
 }
 
-// ── MSAL ───────────────────────────────────────────────
-const SCOPES = ['Sites.ReadWrite.All'];
-
-function getRedirectUri() {
-  return window.location.origin + window.location.pathname;
-}
-
-function initMsal(cfg) {
+// ── MSAL BOOT (properly awaited) ───────────────────────
+async function bootMsal(cfg) {
   try {
+    dbg('Creating MSAL instance...');
     msalApp = new msal.PublicClientApplication({
       auth: {
         clientId: cfg.clientId,
-        authority: `https://login.microsoftonline.com/${cfg.tenantId}`,
-        redirectUri: getRedirectUri()
+        authority: 'https://login.microsoftonline.com/' + cfg.tenantId,
+        redirectUri: window.location.origin + window.location.pathname
       },
       cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
     });
-    // Handle redirect response on page load (fires after Microsoft redirects back)
-    msalApp.handleRedirectPromise().then(r => {
-      if (r && r.account) {
-        account = r.account;
-        siteId = null; listId = null;
-        showToast('Signed in ✓');
-      } else {
-        const accounts = msalApp.getAllAccounts();
-        if (accounts.length) account = accounts[0];
+
+    dbg('Calling handleRedirectPromise...');
+    const response = await msalApp.handleRedirectPromise();
+    msalReady = true;
+    dbg('MSAL ready.');
+
+    if (response && response.account) {
+      account = response.account;
+      dbg('Signed in via redirect: ' + account.username);
+    } else {
+      const accounts = msalApp.getAllAccounts();
+      dbg('Cached accounts found: ' + accounts.length);
+      if (accounts.length > 0) {
+        account = accounts[0];
+        dbg('Using cached account: ' + account.username);
       }
-      updateAuthUI();
-    }).catch(e => {
-      console.error('Redirect error:', e);
-      updateAuthUI();
-    });
-  } catch(e) { console.error('MSAL init failed', e); }
+    }
+    updateAuthUI();
+  } catch(e) {
+    dbg('MSAL boot error: ' + e.message, true);
+    console.error(e);
+    updateAuthUI();
+  }
 }
 
+// ── AUTH ───────────────────────────────────────────────
 async function signIn() {
-  let app = msalApp;
-  if (!app) {
+  dbg('Sign in clicked. msalReady=' + msalReady + ', msalApp=' + !!msalApp);
+  if (!msalApp || !msalReady) {
     const cfg = loadConfig();
     if (!cfg) { openSetup(); return; }
-    // Re-init synchronously
-    try {
-      app = new msal.PublicClientApplication({
-        auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}`, redirectUri: getRedirectUri() },
-        cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
-      });
-      msalApp = app;
-      await app.handleRedirectPromise();
-    } catch(e) { openSetup(); return; }
+    dbg('MSAL not ready — booting now...');
+    await bootMsal(cfg);
   }
-  // Use redirect — navigates away and comes back signed in
+  if (!msalApp || !msalReady) {
+    dbg('MSAL still not ready after boot attempt.', true);
+    showToast('Setup error — check debug log', true);
+    return;
+  }
   try {
-    await app.loginRedirect({ scopes: SCOPES });
+    dbg('Calling loginRedirect...');
+    await msalApp.loginRedirect({ scopes: SCOPES });
+    // Page will navigate away — execution stops here
   } catch(e) {
-    console.error('Login redirect failed:', e);
-    showToast('Sign-in failed — see console for details', true);
+    dbg('loginRedirect failed: ' + e.message, true);
+    console.error(e);
+    showToast('Sign-in failed — see debug log', true);
   }
 }
 
@@ -380,7 +416,7 @@ async function signOut() {
   if (!msalApp || !account) return;
   account = null; siteId = null; listId = null;
   updateAuthUI();
-  try { await msalApp.logoutRedirect(); } catch {}
+  try { await msalApp.logoutRedirect(); } catch(e) { console.error(e); }
 }
 
 function updateAuthUI() {
@@ -390,7 +426,7 @@ function updateAuthUI() {
   document.getElementById('historyBtn').disabled = !on;
   const s = document.getElementById('authStatus');
   if (on) {
-    s.textContent = `Signed in as ${account.name || account.username} — saving to SharePoint.`;
+    s.textContent = 'Signed in as ' + (account.name || account.username) + ' — saving to SharePoint.';
     s.className = 'auth-status signed-in';
   } else {
     s.textContent = 'Not signed in. Assessments will save to this browser only.';
@@ -401,10 +437,12 @@ function updateAuthUI() {
 async function getToken() {
   if (!msalApp || !account) return null;
   try {
-    return (await msalApp.acquireTokenSilent({ scopes: SCOPES, account })).accessToken;
-  } catch {
-    try { await msalApp.acquireTokenRedirect({ scopes: SCOPES }); }
-    catch { return null; }
+    const r = await msalApp.acquireTokenSilent({ scopes: SCOPES, account });
+    return r.accessToken;
+  } catch(e) {
+    dbg('Silent token failed, trying redirect: ' + e.message, true);
+    await msalApp.acquireTokenRedirect({ scopes: SCOPES });
+    return null;
   }
 }
 
@@ -412,21 +450,24 @@ async function getToken() {
 async function graph(method, path, body) {
   const token = await getToken();
   if (!token) throw new Error('Not authenticated');
-  const r = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
-    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  const r = await fetch('https://graph.microsoft.com/v1.0' + path, {
+    method,
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined
   });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error?.message || `HTTP ${r.status}`); }
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error?.message || 'HTTP ' + r.status); }
   return r.status === 204 ? null : r.json();
 }
 
 async function ensureList() {
   if (siteId && listId) return;
   const cfg = loadConfig();
-  const site = await graph('GET', `/sites/root:/sites/${cfg.siteName}`);
+  dbg('Looking up SharePoint site: ' + cfg.siteName);
+  const site = await graph('GET', '/sites/root:/sites/' + cfg.siteName);
   siteId = site.id;
-  const lists = await graph('GET', `/sites/${siteId}/lists?$filter=displayName eq '${LIST_NAME}'&$select=id`);
-  if (lists.value.length) { listId = lists.value[0].id; return; }
+  const lists = await graph('GET', '/sites/' + siteId + '/lists?$filter=displayName eq \'' + LIST_NAME + '\'&$select=id');
+  if (lists.value.length) { listId = lists.value[0].id; dbg('List found: ' + listId); return; }
+  dbg('List not found — creating...');
   const cols = [
     { name: 'WLName', text: {} }, { name: 'Campus', text: {} },
     { name: 'AssessmentDate', dateTime: { format: 'dateOnly' } },
@@ -438,8 +479,9 @@ async function ensureList() {
     { name: 'Strengths', text: { allowMultipleLines: true } },
     { name: 'NextSteps', text: { allowMultipleLines: true } },
   ];
-  const newList = await graph('POST', `/sites/${siteId}/lists`, { displayName: LIST_NAME, columns: cols, list: { template: 'genericList' } });
+  const newList = await graph('POST', '/sites/' + siteId + '/lists', { displayName: LIST_NAME, columns: cols, list: { template: 'genericList' } });
   listId = newList.id;
+  dbg('List created: ' + listId);
 }
 
 // ── FORM ───────────────────────────────────────────────
@@ -504,12 +546,12 @@ async function saveAssessment() {
     if (account) {
       await ensureList();
       if (currentId) {
-        await graph('PATCH', `/sites/${siteId}/lists/${listId}/items/${currentId}/fields`, fields);
+        await graph('PATCH', '/sites/' + siteId + '/lists/' + listId + '/items/' + currentId + '/fields', fields);
       } else {
-        const item = await graph('POST', `/sites/${siteId}/lists/${listId}/items`, { fields });
+        const item = await graph('POST', '/sites/' + siteId + '/lists/' + listId + '/items', { fields });
         currentId = item.id;
       }
-      const label = fields.WLName ? `Saved — ${fields.WLName}${fields.Campus ? ', ' + fields.Campus : ''}` : 'Saved to SharePoint';
+      const label = fields.WLName ? 'Saved — ' + fields.WLName + (fields.Campus ? ', ' + fields.Campus : '') : 'Saved to SharePoint';
       setStatus(label, 'var(--olive)');
       isDirty = false;
       showToast('Saved to SharePoint ✓');
@@ -518,16 +560,16 @@ async function saveAssessment() {
       showToast('Saved locally ✓ (sign in to sync across devices)');
     }
   } catch(e) {
-    console.error(e);
+    dbg('Save error: ' + e.message, true);
     saveLocal(fields);
-    showToast(`SharePoint error — saved locally instead`, true);
+    showToast('SharePoint error — saved locally instead', true);
   }
   btn.disabled = false; btn.textContent = 'Save Assessment';
 }
 
 function saveLocal(fields) {
   const all = JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
-  const id = currentId || `local-${Date.now()}`;
+  const id = currentId || 'local-' + Date.now();
   if (!currentId) currentId = id;
   const entry = { id, savedAt: new Date().toISOString(), ...fields };
   const idx = all.findIndex(a => a.id === id);
@@ -549,10 +591,10 @@ async function loadHistory() {
   list.innerHTML = '<div class="history-loading">Loading…</div>';
   try {
     await ensureList();
-    const data = await graph('GET', `/sites/${siteId}/lists/${listId}/items?$expand=fields($select=WLName,Campus,AssessmentDate,Assessor)&$orderby=lastModifiedDateTime desc&$top=50`);
+    const data = await graph('GET', '/sites/' + siteId + '/lists/' + listId + '/items?$expand=fields($select=WLName,Campus,AssessmentDate,Assessor)&$orderby=lastModifiedDateTime desc&$top=50');
     renderHistory(data.value.map(item => ({ id: item.id, ...item.fields })));
   } catch(e) {
-    list.innerHTML = `<div class="history-empty">Couldn't load — ${e.message}</div>`;
+    list.innerHTML = '<div class="history-empty">Couldn\'t load — ' + e.message + '</div>';
   }
 }
 
@@ -561,27 +603,22 @@ function renderHistory(items) {
   if (!items.length) { list.innerHTML = '<div class="history-empty">No saved assessments yet.</div>'; return; }
   list.innerHTML = items.map(a => {
     const name = a.WLName || 'Unnamed';
-    const campus = a.Campus ? ` · ${a.Campus}` : '';
+    const campus = a.Campus ? ' · ' + a.Campus : '';
     const dateStr = a.AssessmentDate ? new Date(a.AssessmentDate + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-    const assessor = a.Assessor ? ` · ${a.Assessor}` : '';
-    return `<div class="history-item" onclick="loadItem('${a.id}')" style="background:${a.id===currentId?'var(--light-bg)':'#fff'}">
-      <div style="flex:1;min-width:0">
-        <div class="history-item-name">${name}${campus}</div>
-        <div class="history-item-meta">${dateStr}${assessor}</div>
-      </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <button class="btn danger" onclick="deleteItem('${a.id}',event)">Delete</button>
-      </div>
-    </div>`;
+    const assessor = a.Assessor ? ' · ' + a.Assessor : '';
+    return '<div class="history-item" onclick="loadItem(\'' + a.id + '\')" style="background:' + (a.id===currentId?'var(--light-bg)':'#fff') + '">' +
+      '<div style="flex:1;min-width:0"><div class="history-item-name">' + name + campus + '</div>' +
+      '<div class="history-item-meta">' + dateStr + assessor + '</div></div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0"><button class="btn danger" onclick="deleteItem(\'' + a.id + '\',event)">Delete</button></div></div>';
   }).join('');
 }
 
 async function loadItem(id) {
   try {
     await ensureList();
-    const item = await graph('GET', `/sites/${siteId}/lists/${listId}/items/${id}?$expand=fields`);
+    const item = await graph('GET', '/sites/' + siteId + '/lists/' + listId + '/items/' + id + '?$expand=fields');
     applyFields(item.fields, id);
-    setStatus(`Loaded — ${item.fields.WLName || 'assessment'}`, 'var(--olive)');
+    setStatus('Loaded — ' + (item.fields.WLName || 'assessment'), 'var(--olive)');
     isDirty = false;
     document.getElementById('historyDrawer').classList.remove('open');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -594,7 +631,7 @@ async function deleteItem(id, e) {
   if (!confirm('Delete this assessment? This cannot be undone.')) return;
   try {
     await ensureList();
-    await graph('DELETE', `/sites/${siteId}/lists/${listId}/items/${id}`);
+    await graph('DELETE', '/sites/' + siteId + '/lists/' + listId + '/items/' + id);
     if (currentId === id) clearForm();
     loadHistory();
     showToast('Deleted');
@@ -610,9 +647,9 @@ function newAssessment() {
 
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
-  t.textContent = msg; t.className = 'toast show' + (isErr ? ' err' : '');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
   setTimeout(() => t.classList.remove('show'), 2800);
 }
-</script>
 </body>
 </html>
