@@ -318,48 +318,69 @@ function saveConfig() {
 }
 
 // ── MSAL ───────────────────────────────────────────────
+const SCOPES = ['Sites.ReadWrite.All'];
+
+function getRedirectUri() {
+  return window.location.origin + window.location.pathname;
+}
+
 function initMsal(cfg) {
   try {
     msalApp = new msal.PublicClientApplication({
-      auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}`, redirectUri: window.location.href.split('?')[0].split('#')[0] },
-      cache: { cacheLocation: 'localStorage' }
+      auth: {
+        clientId: cfg.clientId,
+        authority: `https://login.microsoftonline.com/${cfg.tenantId}`,
+        redirectUri: getRedirectUri()
+      },
+      cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
     });
+    // Handle redirect response on page load (fires after Microsoft redirects back)
     msalApp.handleRedirectPromise().then(r => {
-      if (r) account = r.account;
-      else { const a = msalApp.getAllAccounts(); if (a.length) account = a[0]; }
+      if (r && r.account) {
+        account = r.account;
+        siteId = null; listId = null;
+        showToast('Signed in ✓');
+      } else {
+        const accounts = msalApp.getAllAccounts();
+        if (accounts.length) account = accounts[0];
+      }
       updateAuthUI();
-    }).catch(console.error);
+    }).catch(e => {
+      console.error('Redirect error:', e);
+      updateAuthUI();
+    });
   } catch(e) { console.error('MSAL init failed', e); }
 }
 
 async function signIn() {
-  // If MSAL isn't initialized, try loading config and initializing first
-  if (!msalApp) {
+  let app = msalApp;
+  if (!app) {
     const cfg = loadConfig();
     if (!cfg) { openSetup(); return; }
-    initMsal(cfg);
-    // Give MSAL a moment to initialize before proceeding
-    await new Promise(r => setTimeout(r, 500));
+    // Re-init synchronously
+    try {
+      app = new msal.PublicClientApplication({
+        auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}`, redirectUri: getRedirectUri() },
+        cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+      });
+      msalApp = app;
+      await app.handleRedirectPromise();
+    } catch(e) { openSetup(); return; }
   }
-  if (!msalApp) { openSetup(); return; }
+  // Use redirect — navigates away and comes back signed in
   try {
-    const r = await msalApp.loginPopup({ scopes: ['Sites.ReadWrite.All'] });
-    account = r.account;
-    siteId = null; listId = null;
-    updateAuthUI();
-    showToast('Signed in ✓');
+    await app.loginRedirect({ scopes: SCOPES });
   } catch(e) {
-    console.error(e);
-    showToast('Sign-in failed — check setup', true);
+    console.error('Login redirect failed:', e);
+    showToast('Sign-in failed — see console for details', true);
   }
 }
 
 async function signOut() {
   if (!msalApp || !account) return;
-  try { await msalApp.logoutPopup({ account }); } catch {}
   account = null; siteId = null; listId = null;
   updateAuthUI();
-  document.getElementById('historyDrawer').classList.remove('open');
+  try { await msalApp.logoutRedirect(); } catch {}
 }
 
 function updateAuthUI() {
@@ -368,14 +389,23 @@ function updateAuthUI() {
   document.getElementById('signOutBtn').style.display = on ? '' : 'none';
   document.getElementById('historyBtn').disabled = !on;
   const s = document.getElementById('authStatus');
-  if (on) { s.textContent = `Signed in as ${account.name || account.username} — saving to SharePoint.`; s.className = 'auth-status signed-in'; }
-  else { s.textContent = 'Not signed in. Assessments will save to this browser only.'; s.className = 'auth-status'; }
+  if (on) {
+    s.textContent = `Signed in as ${account.name || account.username} — saving to SharePoint.`;
+    s.className = 'auth-status signed-in';
+  } else {
+    s.textContent = 'Not signed in. Assessments will save to this browser only.';
+    s.className = 'auth-status';
+  }
 }
 
 async function getToken() {
   if (!msalApp || !account) return null;
-  try { return (await msalApp.acquireTokenSilent({ scopes: ['Sites.ReadWrite.All'], account })).accessToken; }
-  catch { try { return (await msalApp.acquireTokenPopup({ scopes: ['Sites.ReadWrite.All'] })).accessToken; } catch { return null; } }
+  try {
+    return (await msalApp.acquireTokenSilent({ scopes: SCOPES, account })).accessToken;
+  } catch {
+    try { await msalApp.acquireTokenRedirect({ scopes: SCOPES }); }
+    catch { return null; }
+  }
 }
 
 // ── GRAPH ──────────────────────────────────────────────
